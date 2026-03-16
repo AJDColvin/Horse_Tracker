@@ -1,0 +1,16 @@
+# custom_botsort.yaml
+tracker_type: botsort # choice of [botsort, bytetrack]
+track_high_thresh: 0.5 # threshold for the first association
+track_low_thresh: 0.1 # threshold for the second association
+new_track_thresh: 0.6 # threshold for initiating a new track
+track_buffer: 60   # frames to "remember" a horse if it's hidden (3 seconds at 30fps)
+match_thresh: 0.6    # threshold for matching tracks - below 0.6 starts to act funny
+fuse_score: True
+# Camera Motion Compensation (CMC)
+# Since your camera is static, we can disable this to save CPU/GPU power.
+gmc_method: null      # choices: [opencv, gmc, sparseOptFlow, null]
+# Re-Identification (ReID)
+proximity_thresh: 0.1 # This seems to be the kicker. Keep it low
+appearance_thresh: 0.2
+with_reid: True       # Keep True to help distinguish between similar-looking horses
+model: auto

@@ -3,6 +3,7 @@ import math
 import torch
 from collections import deque
 from ultralytics import YOLO
+import csv
 
 MOVEMENT_THRESHOLD = 600.0
 MIN_STATE_TIME = 2.0
@@ -167,13 +168,54 @@ class HorseTracker:
                     timestamp = f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
                     print(f"  [{timestamp}] to {record['changed_from']}")
 
-                # Final timestamp
-                timestamp = self._format_timestamps(total_seconds)
-                print(f"  [{timestamp}] to {self.horse_states[horse_id]}")
+                # Final timestam
         
-        def _export_csv(self, filepath="./"):
-            pass
+        def _export_csv(self, filename: str ="horse_activity_log.csv"):
+            
+            with open(filename, mode='w', newline='') as file:
+                writer = csv.writer(file)
 
+                for horse_id, history in self.state_history.items():
+                    
+                    # Headings 
+                    writer.writerow([f"Horse {horse_id + 1}", "", ""])
+                    writer.writerow(["State", "Start", "End"])
+                    
+                    total_moving_seconds = 0.0 # Total time spent moving
+                    total_duration = 0.0
+                    start_time = 0.0
+                    
+                    # Main data, all timestamps
+                    for record in history:
+                        state = record['changed_from']
+                        end_time = record['timestamp']
+                        
+                        start_str = self._format_timestamps(start_time)
+                        end_str = self._format_timestamps(end_time)
+                        
+                        writer.writerow([state, start_str, end_str])
+                        
+                        duration = end_time - start_time
+                        if state == "MOVING":
+                            total_moving_seconds += duration
+                            
+                        start_time = end_time
+                        total_duration = end_time
+                        
+                    # Final row with overall stats
+                    writer.writerow(["", "Total Activity", "Perc of Day, Moving"])
+        
+                    moving_str = self._format_timestamps(total_moving_seconds)
+                    
+                    if total_duration > 0:
+                        percent_moving = (total_moving_seconds/ total_duration) * 100
+                    else:
+                        percent_moving = 0.0 
+                      
+                    percent_str = f"{percent_moving:.1f}%"
+                    writer.writerow(["", moving_str, percent_str])
+                    
+                    writer.writerow([])
             
         def run(self):
             """Main execution loop"""
@@ -224,6 +266,13 @@ class HorseTracker:
                 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
+            
+            # Final timestamps logic
+            for horse_id in range(INDIVIDUALS):
+                    self.state_history[horse_id].append({
+                        "timestamp": total_seconds,
+                        "changed_from": self.horse_states[horse_id]
+                    })
                 
             self._print_summary(total_seconds)
             self._export_csv()

@@ -5,9 +5,9 @@ from collections import deque
 from ultralytics import YOLO
 import csv
 
-MOVEMENT_THRESHOLD = 600.0
-MIN_STATE_TIME = 2.0
-INDIVIDUALS = 2
+# MOVEMENT_THRESHOLD = 600.0
+# MIN_STATE_TIME = 2.0
+# INDIVIDUALS = 2
 FPS = 15
 WINDOW_SIZE = 15
 STRIDE = 2
@@ -16,16 +16,38 @@ id_to_replace = list(range(14,24))
 id_to_replace.append(0)
 
 class HorseTracker:
-        def __init__(self, model_path: str, video_path:str):
+        def __init__(
+            self, 
+            model_path: str, 
+            video_path:str, 
+            csv_path:str = "horse_activity_log.csv", 
+            save_path:str = None, 
+            custom_model: bool = False,
+            movement_threshold: float = 600.0,
+            min_state_time: float = 2.0,
+            individuals: int = 2
+        ):
+            
+            # Filepaths
             self.model = YOLO(model_path)
             self.video_path = video_path
+            self.csv_path = csv_path
+            self.save_path = save_path
+            
+            # Constants
+            self.movement_threshold = movement_threshold
+            self.min_state_time = min_state_time
+            self.individuals = individuals
             
             # Initialize state variables
-            self.windows = [deque(maxlen=WINDOW_SIZE) for _ in range(INDIVIDUALS)]
+            self.windows = [deque(maxlen=WINDOW_SIZE) for _ in range(individuals)]
             self.prev_coordinates = {}
-            self.horse_states = {i: "OUT_OF_FRAME" for i in range(INDIVIDUALS)}
-            self.state_history = {i: [] for i in range(INDIVIDUALS)}
-            self.valid_ids = list(range(1, INDIVIDUALS + 1))
+            self.horse_states = {i: "OUT_OF_FRAME" for i in range(individuals)}
+            self.state_history = {i: [] for i in range(individuals)}
+            self.valid_ids = list(range(1, individuals + 1))
+            self.frame_data = {} # Cache bounding box data for ammended video
+            
+            self.custom_model = custom_model
         
          
         # Internal Methods   
@@ -40,10 +62,10 @@ class HorseTracker:
             """Handles logic for overriding animal classes with horse class"""
             
             # Replace any animal detections with horses
-            amended_boxes = result.boxes.data.clone()
-            
-            for class_id in id_to_replace:
-                amended_boxes[:, -1][amended_boxes[:, -1] == class_id] = 17
+            amended_boxes = result.boxes.data.clone() 
+            if not self.custom_model: 
+                for class_id in id_to_replace:
+                    amended_boxes[:, -1][amended_boxes[:, -1] == class_id] = 17
             
             # annotated_frame = result.plot(line_width=2)
             # boxes = result.boxes.xyxy.cpu().numpy()
@@ -99,14 +121,14 @@ class HorseTracker:
             
             window_avg = sum(self.windows[id_val])/len(self.windows[id_val])
             
-            if window_avg > MOVEMENT_THRESHOLD:
+            if window_avg > self.movement_threshold:
                 current_state = "MOVING"
             else:
                 current_state = "STILL"
             
             return current_state
 
-        def _draw_annotations(self, frame, x1, y1, x2, y2, state):
+        def _draw_annotations(self, frame, x1, y1, x2, y2, state, amending=False, horse_id: int = None):
             """Draws boxes and text on the current frame"""
             
             if state == "MOVING":
@@ -126,7 +148,24 @@ class HorseTracker:
                     (0,255,0),
                     thickness= 2
                 )
+                if amending:
+                    cv2.putText(    
+                        frame,
+                        f"ID {horse_id + 1}",
+                        (int(x1), int(y1) - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.75,
+                        (0,255,0),
+                        thickness=2
+                    )
             else:
+                cv2.rectangle(
+                    frame,
+                    (int(x1),int(y1)),
+                    (int(x2),int(y2)),
+                    (147,20,255),
+                    2
+                )
                 cv2.putText(
                     frame,
                     'STILL',
@@ -136,6 +175,16 @@ class HorseTracker:
                     (147,20,255),
                     thickness= 2
                 )
+                if amending:
+                    cv2.putText(    
+                        frame,
+                        f"ID {horse_id + 1}",
+                        (int(x1), int(y1) - 20),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.75,
+                        (147,20,255),
+                        thickness=2
+                    )
         
         def _update_state_history(self, id_val: int, current_state: str, total_seconds: float):
             previous_state = self.horse_states[id_val]
@@ -146,7 +195,7 @@ class HorseTracker:
                 else:
                     state_time = total_seconds
                     
-                if state_time > MIN_STATE_TIME:
+                if state_time > self.min_state_time:
                     self.state_history[id_val].append({
                         "timestamp": total_seconds,
                         "changed_from": previous_state
@@ -216,7 +265,62 @@ class HorseTracker:
                     writer.writerow(["", moving_str, percent_str])
                     
                     writer.writerow([])
+           
+        def _get_smoothed_state(self, horse_id: int, current_time: float) -> str:
+            """Determines the smoothed state of horse at a specific timestamp"""
             
+            history = self.state_history.get(horse_id, [])
+            
+            for record in history:
+                if current_time <= record['timestamp']:
+                    return record['changed_from']
+            
+            return self.horse_states.get(horse_id, "OUT_OF_FRAME")   
+        
+        def _save_amended_video(self):
+            """Creates a new video with smoothed states applied."""    
+            cap = cv2.VideoCapture(self.video_path)
+            
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v') # * parses 'm''p' '4' 'v', which is the format expected
+            
+            original_fps = cap.get(cv2.CAP_PROP_FPS)
+            output_fps = original_fps / STRIDE 
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            out = cv2.VideoWriter(self.save_path, fourcc, output_fps, (width, height))
+            
+            frame_idx = 0      
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                    
+                # Skip frames to match the YOLO vid_stride
+                if frame_idx % STRIDE != 0:
+                    frame_idx += 1
+                    continue
+                
+                processed_frame_no = frame_idx // STRIDE
+                total_seconds = processed_frame_no * STRIDE / FPS
+                
+                frame_boxes = self.frame_data.get(processed_frame_no, {})
+                
+                for horse_id, box in frame_boxes.items():
+                    print("INSIDE SAVEAMENDEDVIDEO: ", end=" ")
+                    print(horse_id)
+                    smoothed_state = self._get_smoothed_state(horse_id, total_seconds)
+                    x1, y1, x2, y2 = box
+                    self._draw_annotations(frame, x1, y1, x2, y2, smoothed_state, amending=True, horse_id=horse_id)
+                
+                out.write(frame)
+                frame_idx += 1
+            
+            cap.release()
+            out.release()
+            print(f"Saved to {self.filename}")
+                    
+                     
         def run(self):
             """Main execution loop"""
             results = self.model.track(
@@ -238,9 +342,10 @@ class HorseTracker:
                 
                 if result.boxes is not None:
                     
+                    # Rectify all animals to horse, unless only 1 class (in custom model)
                     id_to_box, annotated_frame = self._rectify_ids(result)
                     
-                    for id_val in range(INDIVIDUALS):
+                    for id_val in range(self.individuals):
                         box = id_to_box.get(id_val+1)
                         current_state = "OUT_OF_FRAME"
                         
@@ -248,7 +353,14 @@ class HorseTracker:
                             current_state = self._calculate_movement(id_val, box, frame_no)
                             
                             x1, y1, x2, y2 = box
+                            
+                            # Draw annotations on video
                             self._draw_annotations(annotated_frame, x1, y1, x2, y2, current_state)
+                            
+                            # Cache bounding boxes for ammended video
+                            if frame_no not in self.frame_data:
+                                self.frame_data[frame_no] = {}
+                            self.frame_data[frame_no][id_val] = (x1, y1, x2, y2)  
                         
                         else:
                             self.windows[id_val].clear()
@@ -258,6 +370,7 @@ class HorseTracker:
                         print(f"HORSE {id_val+1}: {current_state}", end=" ")
                         
                         self._update_state_history(id_val, current_state, total_seconds)
+              
                     print('')
                 else:
                     annotated_frame = result.orig_img.copy()
@@ -268,7 +381,7 @@ class HorseTracker:
                     break
             
             # Final timestamps logic
-            for horse_id in range(INDIVIDUALS):
+            for horse_id in range(self.individuals):
                     self.state_history[horse_id].append({
                         "timestamp": total_seconds,
                         "changed_from": self.horse_states[horse_id]
@@ -276,12 +389,14 @@ class HorseTracker:
                 
             self._print_summary(total_seconds)
             self._export_csv()
+            if self.save_path:
+                self._save_amended_video()
             
 if __name__ == "__main__":
-    MODEL_PATH = '../YOLO_models/yolo11s.pt'
+    MODEL_PATH = '../YOLO_models/yolo11s_Professor_M_Horses-2_F10.pt'
     VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/2_individuals_1_leave_return.mp4.mov'
     
-    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH)
+    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, custom_model=True)
     tracker.run()       
             
     

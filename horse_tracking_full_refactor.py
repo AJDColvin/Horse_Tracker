@@ -4,6 +4,7 @@ import torch
 from collections import deque
 from ultralytics import YOLO
 import csv
+import pandas as pd
 
 # MOVEMENT_THRESHOLD = 600.0
 # MIN_STATE_TIME = 2.0
@@ -46,6 +47,9 @@ class HorseTracker:
             self.state_history = {i: [] for i in range(individuals)}
             self.valid_ids = list(range(1, individuals + 1))
             self.frame_data = {} # Cache bounding box data for ammended video
+            
+            self.discrete_state_history = {i: [] for i in range(individuals)}
+            
             
             self.custom_model = custom_model
         
@@ -185,26 +189,8 @@ class HorseTracker:
                         (147,20,255),
                         thickness=2
                     )
-        
-        def _update_state_history(self, id_val: int, current_state: str, total_seconds: float):
-            previous_state = self.horse_states[id_val]
-            
-            if current_state != previous_state:
-                if self.state_history[id_val]:
-                    state_time = total_seconds - self.state_history[id_val][-1]['timestamp']
-                else:
-                    state_time = total_seconds
-                    
-                if state_time > self.min_state_time:
-                    self.state_history[id_val].append({
-                        "timestamp": total_seconds,
-                        "changed_from": previous_state
-                    })
-                    
-                    # Update the active state record
-                    self.horse_states[id_val] = current_state
-        
-        def _print_summary(self, total_seconds):
+    
+        def _print_summary(self):
             print("\n--- FINAL STATE HISTORY ---")
             for horse_id, history in self.state_history.items():
                 print(f"\nHorse {horse_id + 1}:")
@@ -265,6 +251,53 @@ class HorseTracker:
                     writer.writerow(["", moving_str, percent_str])
                     
                     writer.writerow([])
+
+        def _discrete_rolling_mode(self, data_dict, window_frames=21):
+            """
+            Applies a rolling majority-vote filter to discrete CV data and 
+            returns a sparse event log of state changes.
+            
+            Parameters:
+            data_dict (dict): Nested dictionary containing horse IDs and per-frame states.
+            window_frames (int): The size of the rolling window in number of frames.
+            """
+            filtered_data = {}
+
+            for horse_id, frames in data_dict.items():
+                if not frames:
+                    filtered_data[horse_id] = []
+                    continue
+
+                df = pd.DataFrame(frames)
+
+                # 1. Calculate the rolling mode using dummy variables
+                dummies = pd.get_dummies(df['state'])
+                rolling_counts = dummies.rolling(
+                    window=window_frames, 
+                    center=True, 
+                    min_periods=1
+                ).sum()
+                
+                df['smoothed_state'] = rolling_counts.idxmax(axis=1)
+
+                # 2. Detect where the smoothed state changes
+                df['state_changed'] = df['smoothed_state'] != df['smoothed_state'].shift(-1)
+            
+
+                # 3. Extract only the transition events
+                events_df = df[df['state_changed']]
+                
+                # 4. Format the output to the sparse 'changed_from' structure
+                filtered_events = []
+                for _, row in events_df.iterrows():
+                    filtered_events.append({
+                        'timestamp': float(row['timestamp']),
+                        'changed_from': row['smoothed_state']
+                    })
+                    
+                filtered_data[horse_id] = filtered_events
+
+            return filtered_data
            
         def _get_smoothed_state(self, horse_id: int, current_time: float) -> str:
             """Determines the smoothed state of horse at a specific timestamp"""
@@ -307,8 +340,6 @@ class HorseTracker:
                 frame_boxes = self.frame_data.get(processed_frame_no, {})
                 
                 for horse_id, box in frame_boxes.items():
-                    print("INSIDE SAVEAMENDEDVIDEO: ", end=" ")
-                    print(horse_id)
                     smoothed_state = self._get_smoothed_state(horse_id, total_seconds)
                     x1, y1, x2, y2 = box
                     self._draw_annotations(frame, x1, y1, x2, y2, smoothed_state, amending=True, horse_id=horse_id)
@@ -318,7 +349,7 @@ class HorseTracker:
             
             cap.release()
             out.release()
-            print(f"Saved to {self.filename}")
+            print(f"Saved to {self.save_path}")
                     
                      
         def run(self):
@@ -342,7 +373,6 @@ class HorseTracker:
                 
                 if result.boxes is not None:
                     
-                    # Rectify all animals to horse, unless only 1 class (in custom model)
                     id_to_box, annotated_frame = self._rectify_ids(result)
                     
                     for id_val in range(self.individuals):
@@ -367,11 +397,13 @@ class HorseTracker:
                             if id_val in self.prev_coordinates:
                                 del self.prev_coordinates[id_val]
                                 
-                        print(f"HORSE {id_val+1}: {current_state}", end=" ")
-                        
-                        self._update_state_history(id_val, current_state, total_seconds)
+                        # print(f"HORSE {id_val+1}: {current_state}", end=" ")
+                        self.discrete_state_history[id_val].append({
+                        "timestamp": total_seconds,
+                        "state": current_state
+                        })
               
-                    print('')
+                    # print(self._format_timestamps(total_seconds))
                 else:
                     annotated_frame = result.orig_img.copy()
                     
@@ -381,22 +413,25 @@ class HorseTracker:
                     break
             
             # Final timestamps logic
-            for horse_id in range(self.individuals):
-                    self.state_history[horse_id].append({
-                        "timestamp": total_seconds,
-                        "changed_from": self.horse_states[horse_id]
-                    })
-                
-            self._print_summary(total_seconds)
+            # for horse_id in range(self.individuals):
+            #         self.state_history[horse_id].append({
+            #             "timestamp": total_seconds,
+            #             "changed_from": self.horse_states[horse_id]
+            #         })
+            
+            self.state_history = self._discrete_rolling_mode(self.discrete_state_history, window_frames=21)
+            self._print_summary()
+            
+            
             self._export_csv()
             if self.save_path:
                 self._save_amended_video()
             
 if __name__ == "__main__":
     MODEL_PATH = '../YOLO_models/yolo11s_Professor_M_Horses-2_F10.pt'
-    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/2_individuals_1_leave_return.mp4.mov'
+    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/clip_4.mp4'
     
-    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, custom_model=True)
-    tracker.run()       
+    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, custom_model=True, min_state_time=0.0, save_path="/Volumes/USB Drive/amended_tracking.mp4")
+    tracker.run()   
             
     

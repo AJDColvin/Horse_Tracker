@@ -5,6 +5,7 @@ from collections import deque
 from ultralytics import YOLO
 import csv
 import pandas as pd
+import matplotlib.pyplot as plt
 
 # MOVEMENT_THRESHOLD = 600.0
 # MIN_STATE_TIME = 2.0
@@ -25,8 +26,8 @@ class HorseTracker:
             save_path:str = None, 
             custom_model: bool = False,
             movement_threshold: float = 600.0,
-            min_state_time: float = 2.0,
-            individuals: int = 2
+            individuals: int = 2,
+            smoothing_window_size: int = 31
         ):
             
             # Filepaths
@@ -37,8 +38,8 @@ class HorseTracker:
             
             # Constants
             self.movement_threshold = movement_threshold
-            self.min_state_time = min_state_time
             self.individuals = individuals
+            self.smoothing_window_size = smoothing_window_size
             
             # Initialize state variables
             self.windows = [deque(maxlen=WINDOW_SIZE) for _ in range(individuals)]
@@ -49,6 +50,7 @@ class HorseTracker:
             self.frame_data = {} # Cache bounding box data for ammended video
             
             self.discrete_state_history = {i: [] for i in range(individuals)}
+            self.discrete_state_history_smooth = {i: [] for i in range(individuals)}
             
             
             self.custom_model = custom_model
@@ -153,14 +155,21 @@ class HorseTracker:
                     thickness= 2
                 )
                 if amending:
+                    cv2.rectangle(
+                        frame, 
+                        (int(x1), int(y1)), 
+                        (int(x1) + 65, int(y1) - 20), 
+                        (0,255,0), 
+                        -1
+                    )
                     cv2.putText(    
                         frame,
-                        f"ID {horse_id + 1}",
-                        (int(x1), int(y1) - 20),
+                        f"ID:{horse_id + 1}",
+                        (int(x1) + 5, int(y1) - 5),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.75,
-                        (0,255,0),
-                        thickness=2
+                        0.6,
+                        (255,255,255),
+                        thickness=1
                     )
             else:
                 cv2.rectangle(
@@ -180,14 +189,21 @@ class HorseTracker:
                     thickness= 2
                 )
                 if amending:
+                    cv2.rectangle(
+                        frame, 
+                        (int(x1), int(y1)), 
+                        (int(x1) + 65, int(y1) - 20), 
+                        (147,20,255), 
+                        -1
+                    )
                     cv2.putText(    
                         frame,
-                        f"ID {horse_id + 1}",
-                        (int(x1), int(y1) - 20),
+                        f"ID:{horse_id + 1}",
+                        (int(x1) + 5, int(y1) - 5),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.75,
-                        (147,20,255),
-                        thickness=2
+                        0.6,
+                        (255, 255,255),
+                        thickness=1
                     )
     
         def _print_summary(self):
@@ -252,7 +268,7 @@ class HorseTracker:
                     
                     writer.writerow([])
 
-        def _discrete_rolling_mode(self, data_dict, window_frames=21):
+        def _discrete_rolling_mode(self, data_dict, window_frames):
             """
             Applies a rolling majority-vote filter to discrete CV data and 
             returns a sparse event log of state changes.
@@ -279,6 +295,15 @@ class HorseTracker:
                 ).sum()
                 
                 df['smoothed_state'] = rolling_counts.idxmax(axis=1)
+                
+                filtered_discrete = []
+                for _, row in df.iterrows():
+                    filtered_discrete.append({
+                        'timestamp': float(row['timestamp']),
+                        'state':  row['smoothed_state']
+                    })
+                self.discrete_state_history_smooth[horse_id] = filtered_discrete
+                    
 
                 # 2. Detect where the smoothed state changes
                 df['state_changed'] = df['smoothed_state'] != df['smoothed_state'].shift(-1)
@@ -419,19 +444,84 @@ class HorseTracker:
             #             "changed_from": self.horse_states[horse_id]
             #         })
             
-            self.state_history = self._discrete_rolling_mode(self.discrete_state_history, window_frames=21)
+            self.state_history = self._discrete_rolling_mode(self.discrete_state_history, window_frames=self.smoothing_window_size)
             self._print_summary()
             
             
             self._export_csv()
             if self.save_path:
                 self._save_amended_video()
+    
+
+        def plot(self, raw=True, smooth=True):
+            # Initialise the figure once outside the loop to plot everyone together
+            plt.figure(figsize=(12, 6))
+            
+            # Define the order of states for the y axis
+            state_order = ["OUT_OF_FRAME", "MOVING", "STILL"]
+            state_map = {state: i for i, state in enumerate(state_order)}
+            
+            # Use a standard Matplotlib colour cycle
+            colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+            for horse_id in range(self.individuals):
+                color = colors[horse_id % len(colors)]
+                
+                # Plot Raw Data
+                if raw:
+                    timestamps = [item['timestamp'] for item in self.discrete_state_history[horse_id]]
+                    y_values = [state_map[item['state']] for item in self.discrete_state_history[horse_id]]
+                    plt.step(timestamps, y_values, where='post', color=color, 
+                            linewidth=1, alpha=0.5, label=f"Horse {horse_id+1} (Raw)")
+
+                # Plot Smoothed Data
+                if smooth:
+                    timestamps_smooth = [item['timestamp'] for item in self.discrete_state_history_smooth[horse_id]]
+                    y_values_smooth = [state_map[item['state']] for item in self.discrete_state_history_smooth[horse_id]]
+                    plt.step(timestamps_smooth, y_values_smooth, where='post', color=color, 
+                            linewidth=2, linestyle='dashed', label=f"Horse {horse_id+1} (Smooth)")
+
+            # Customising the axes
+            plt.yticks(range(len(state_order)), state_order)
+            plt.xlabel("Time (seconds)")
+            plt.ylabel("State")
+            plt.title("Horse State Transitions: Raw vs Smoothed")
+            plt.grid(True, axis='x', linestyle=':', alpha=0.6)
+            
+            # Place the legend outside the plot area if there are many horses
+            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small')
+            
+            plt.tight_layout()
+            plt.show()
+                
+                
             
 if __name__ == "__main__":
-    MODEL_PATH = '../YOLO_models/yolo11s_Professor_M_Horses-2_F10.pt'
-    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/clip_4.mp4'
+    MODEL_PATH = '../YOLO_models/yolo11s_Professor_M_Horses_F10.pt'
+    # MODEL_PATH = '../YOLO_models/yolo11s.pt'
+    # MODEL_PATH = '/Users/alexcolvin/Dev/Final Year Project/YOLO_models/yolo11s_Professor_M_Horses-2_NoWhiteFence_F0.pt'
+    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/White_horse_near_fence_trim.mp4'
+    # VIDEO_PATH = '/Volumes/USB Drive/TAPO/20260311_164113_tp00013_potential4unseen.mp4'
+
     
-    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, custom_model=True, min_state_time=0.0, save_path="/Volumes/USB Drive/amended_tracking.mp4")
-    tracker.run()   
-            
+    SAVE_PATH = '/Volumes/USB Drive/TestingAmendVidFunction2.mp4'
+    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, save_path=SAVE_PATH, custom_model=True, smoothing_window_size=75)
+    tracker.run()
+    
+    # models_test = [
+    #     '../YOLO_models/yolo11s_Professor_M_Horses_F0.pt',
+    #     '../YOLO_models/yolo11s_Professor_M_Horses_F10.pt',
+    #     '../YOLO_models/yolo11s_Professor_M_Horses_NoWhiteFence_F0.pt',
+    #     '../YOLO_models/yolo11s_Professor_M_Horses_NoWhiteFence_F10.pt',
+        
+    # ]
+    
+    # names = ['yolo11s_Professor_M_Horses-2_F0', 'yolo11s_Professor_M_Horses_F10', 'yolo11s_Professor_M_Horses-2_NoWhiteFence_F0', 'yolo11s_Professor_M_Horses_NoWhiteFence_F10']
+    
+    # for name, model in zip(names, models_test):
+    #     SAVE_PATH = f'/Volumes/USB Drive/Output_Videos/Testing white horse near fence/WhiteHorseNearFenceModel{name}.mp4'
+    #     tracker = HorseTracker(model, VIDEO_PATH, save_path=SAVE_PATH, custom_model=True, smoothing_window_size=75)
+    #     tracker.run()   
+    
+
     

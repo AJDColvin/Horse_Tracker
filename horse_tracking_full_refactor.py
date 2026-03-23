@@ -7,6 +7,7 @@ import csv
 import pandas as pd
 import matplotlib.pyplot as plt
 import openpyxl 
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 # MOVEMENT_THRESHOLD = 600.0
 # MIN_STATE_TIME = 2.0
@@ -225,25 +226,67 @@ class HorseTracker:
                     
 
         def _export_excel(self, filename: str = "horse_activity_log.xlsx"):
+            
             # Create a new workbook and remove the default "Sheet"
             wb = openpyxl.Workbook()
             default_sheet = wb.active
             wb.remove(default_sheet)
+
+            # Colors and Styles
+            title_fill = PatternFill(start_color="FF002060", end_color="FF002060", fill_type="solid")
+            group_fill = PatternFill(start_color="FFD9E1F2", end_color="FFD9E1F2", fill_type="solid")
+            # head_fill = PatternFill(start_color="FFF2F2F2", end_color="FFF2F2F2", fill_type="solid")
+            
+            title_font = Font(size=16, bold=True, color="FFFFFF")
+            bold_font = Font(bold=True)
+            italic_font = Font(italic=True)
+            
+            center_align = Alignment(horizontal="center", vertical="center")
+            left_align = Alignment(horizontal="left", vertical="center")
+            right_align = Alignment(horizontal="right", vertical="center")
+            
+            thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
+                                 top=Side(style='thin'), bottom=Side(style='thin'))
 
             for horse_id, history in self.state_history.items():
                 # Create a new sheet for each horse
                 sheet_title = f"Horse {horse_id + 1}"
                 ws = wb.create_sheet(title=sheet_title)
                 
-                # Headings
+                # --- Row 1: Title ---
                 ws.append([f"Horse {horse_id + 1}", "", "", "", ""])
-                ws.append(["State", "Start", "End", "Start Centroid", "End Centroid"])
+                ws.merge_cells("A1:E1")
+                for row in ws.iter_rows(min_row=1, max_row=1, min_col=1, max_col=5):
+                    for cell in row:
+                        cell.fill = title_fill
+                        cell.font = title_font
+                        cell.alignment = center_align
+                        cell.border = thin_border
                 
+                # --- Row 2: Group Headers ---
+                ws.append(["", "Timestamp", "", "Coordinates", ""])
+                ws.merge_cells("B2:C2")
+                ws.merge_cells("D2:E2")
+                for row in ws.iter_rows(min_row=2, max_row=2, min_col=1, max_col=5):
+                    for cell in row:
+                        cell.fill = group_fill
+                        cell.font = bold_font
+                        cell.alignment = center_align
+                        cell.border = thin_border
+                
+                # --- Row 3: Column Headers ---
+                ws.append(["State", "Start", "End", "Start", "End"])
+                for row in ws.iter_rows(min_row=3, max_row=3, min_col=1, max_col=5):
+                    for cell in row:
+                        cell.font = bold_font
+                        cell.border = thin_border
+                        
+                # Main data rows
+                row_idx = 4
                 total_moving_seconds = 0.0
                 total_duration = 0.0
                 start_time = 0.0
                 
-                # Main data rows
                 for record in history:
                     state = record['changed_from']
                     end_time = record['timestamp']
@@ -267,28 +310,53 @@ class HorseTracker:
                         start_centroid = get_centroid(start_time)
                         end_centroid = get_centroid(end_time)
                     
-                    # Use .append() to add a list as a row in the sheet
                     ws.append([state, start_str, end_str, start_centroid, end_centroid])
-                    
+                    for col_idx in range(1, 6):
+                        cell = ws.cell(row=row_idx, column=col_idx)
+                        cell.border = thin_border
+                        if col_idx == 1:
+                            cell.font = italic_font
+                            cell.alignment = left_align
+                        else:
+                            cell.alignment = left_align
+                            
                     duration = end_time - start_time
                     if state == "MOVING":
                         total_moving_seconds += duration
                         
                     start_time = end_time
                     total_duration = end_time
+                    row_idx += 1
                     
                 # Final row with overall stats
                 ws.append(["", "Total Activity", "Perc of Day, Moving", "", ""])
-                
+                for col_idx in range(1, 6):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.border = thin_border
+                    if col_idx in (2, 3):
+                        cell.font = bold_font
+                        cell.alignment = left_align
+                        
                 moving_str = self._format_timestamps(total_moving_seconds)
+                percent_moving = (total_moving_seconds / total_duration) * 100 if total_duration > 0 else 0.0
+                percent_str = f"{percent_moving:.2f}%"
                 
-                if total_duration > 0:
-                    percent_moving = (total_moving_seconds / total_duration) * 100
-                else:
-                    percent_moving = 0.0 
-                
-                percent_str = f"{percent_moving:.1f}%"
                 ws.append(["", moving_str, percent_str, "", ""])
+                row_idx += 1
+                for col_idx in range(1, 6):
+                    cell = ws.cell(row=row_idx, column=col_idx)
+                    cell.border = thin_border
+                    if col_idx == 3:
+                        cell.alignment = right_align
+                    elif col_idx == 2:
+                        cell.alignment = left_align
+
+                # Set column widths
+                ws.column_dimensions['A'].width = 16
+                ws.column_dimensions['B'].width = 16
+                ws.column_dimensions['C'].width = 22
+                ws.column_dimensions['D'].width = 14
+                ws.column_dimensions['E'].width = 14
 
             # Save the entire workbook at the end
             wb.save(filename)

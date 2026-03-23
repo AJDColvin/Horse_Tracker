@@ -6,6 +6,7 @@ from ultralytics import YOLO
 import csv
 import pandas as pd
 import matplotlib.pyplot as plt
+import openpyxl 
 
 # MOVEMENT_THRESHOLD = 600.0
 # MIN_STATE_TIME = 2.0
@@ -220,53 +221,77 @@ class HorseTracker:
                     print(f"  [{timestamp}] to {record['changed_from']}")
 
                 # Final timestam
-        
-        def _export_csv(self, filename: str ="horse_activity_log.csv"):
-            
-            with open(filename, mode='w', newline='') as file:
-                writer = csv.writer(file)
 
-                for horse_id, history in self.state_history.items():
                     
-                    # Headings 
-                    writer.writerow([f"Horse {horse_id + 1}", "", ""])
-                    writer.writerow(["State", "Start", "End"])
+
+        def _export_excel(self, filename: str = "horse_activity_log.xlsx"):
+            # Create a new workbook and remove the default "Sheet"
+            wb = openpyxl.Workbook()
+            default_sheet = wb.active
+            wb.remove(default_sheet)
+
+            for horse_id, history in self.state_history.items():
+                # Create a new sheet for each horse
+                sheet_title = f"Horse {horse_id + 1}"
+                ws = wb.create_sheet(title=sheet_title)
+                
+                # Headings
+                ws.append([f"Horse {horse_id + 1}", "", "", "", ""])
+                ws.append(["State", "Start", "End", "Start Centroid", "End Centroid"])
+                
+                total_moving_seconds = 0.0
+                total_duration = 0.0
+                start_time = 0.0
+                
+                # Main data rows
+                for record in history:
+                    state = record['changed_from']
+                    end_time = record['timestamp']
                     
-                    total_moving_seconds = 0.0 # Total time spent moving
-                    total_duration = 0.0
-                    start_time = 0.0
+                    start_str = self._format_timestamps(start_time)
+                    end_str = self._format_timestamps(end_time)
                     
-                    # Main data, all timestamps
-                    for record in history:
-                        state = record['changed_from']
-                        end_time = record['timestamp']
-                        
-                        start_str = self._format_timestamps(start_time)
-                        end_str = self._format_timestamps(end_time)
-                        
-                        writer.writerow([state, start_str, end_str])
-                        
-                        duration = end_time - start_time
-                        if state == "MOVING":
-                            total_moving_seconds += duration
-                            
-                        start_time = end_time
-                        total_duration = end_time
-                        
-                    # Final row with overall stats
-                    writer.writerow(["", "Total Activity", "Perc of Day, Moving"])
-        
-                    moving_str = self._format_timestamps(total_moving_seconds)
+                    # Calculate the centroid of the horses
+                    def get_centroid(time_sec):
+                        frame_no = int(round(time_sec * FPS / STRIDE))
+                        if frame_no in self.frame_data and horse_id in self.frame_data[frame_no]:
+                            x1, y1, x2, y2 = self.frame_data[frame_no][horse_id]
+                            cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+                            return f"({cx}, {cy})"
+                        return "N/A"
                     
-                    if total_duration > 0:
-                        percent_moving = (total_moving_seconds/ total_duration) * 100
+                    if state == "OUT_OF_FRAME":
+                        start_centroid = "N/A"
+                        end_centroid = "N/A"
                     else:
-                        percent_moving = 0.0 
-                      
-                    percent_str = f"{percent_moving:.1f}%"
-                    writer.writerow(["", moving_str, percent_str])
+                        start_centroid = get_centroid(start_time)
+                        end_centroid = get_centroid(end_time)
                     
-                    writer.writerow([])
+                    # Use .append() to add a list as a row in the sheet
+                    ws.append([state, start_str, end_str, start_centroid, end_centroid])
+                    
+                    duration = end_time - start_time
+                    if state == "MOVING":
+                        total_moving_seconds += duration
+                        
+                    start_time = end_time
+                    total_duration = end_time
+                    
+                # Final row with overall stats
+                ws.append(["", "Total Activity", "Perc of Day, Moving", "", ""])
+                
+                moving_str = self._format_timestamps(total_moving_seconds)
+                
+                if total_duration > 0:
+                    percent_moving = (total_moving_seconds / total_duration) * 100
+                else:
+                    percent_moving = 0.0 
+                
+                percent_str = f"{percent_moving:.1f}%"
+                ws.append(["", moving_str, percent_str, "", ""])
+
+            # Save the entire workbook at the end
+            wb.save(filename)
 
         def _discrete_rolling_mode(self, data_dict, window_frames):
             """
@@ -448,7 +473,8 @@ class HorseTracker:
             self._print_summary()
             
             
-            self._export_csv()
+            # self._export_csv()
+            self._export_excel()
             if self.save_path:
                 self._save_amended_video()
     
@@ -500,12 +526,12 @@ if __name__ == "__main__":
     MODEL_PATH = '../YOLO_models/yolo11s_Professor_M_Horses_F10.pt'
     # MODEL_PATH = '../YOLO_models/yolo11s.pt'
     # MODEL_PATH = '/Users/alexcolvin/Dev/Final Year Project/YOLO_models/yolo11s_Professor_M_Horses-2_NoWhiteFence_F0.pt'
-    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/White_horse_near_fence_trim.mp4'
+    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/clip_2.mp4'
     # VIDEO_PATH = '/Volumes/USB Drive/TAPO/20260311_164113_tp00013_potential4unseen.mp4'
 
     
     SAVE_PATH = '/Volumes/USB Drive/TestingAmendVidFunction2.mp4'
-    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, save_path=SAVE_PATH, custom_model=True, smoothing_window_size=75)
+    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, custom_model=True, smoothing_window_size=75)
     tracker.run()
     
     # models_test = [

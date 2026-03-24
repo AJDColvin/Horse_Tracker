@@ -8,6 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import openpyxl 
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+import argparse
 
 # MOVEMENT_THRESHOLD = 600.0
 # MIN_STATE_TIME = 2.0
@@ -24,7 +25,7 @@ class HorseTracker:
             self, 
             model_path: str, 
             video_path:str, 
-            csv_path:str = "horse_activity_log.csv", 
+            excel_path:str = "horse_activity_log.xlsx", 
             save_path:str = None, 
             custom_model: bool = False,
             movement_threshold: float = 600.0,
@@ -35,7 +36,7 @@ class HorseTracker:
             # Filepaths
             self.model = YOLO(model_path)
             self.video_path = video_path
-            self.csv_path = csv_path
+            self.excel_path = excel_path
             self.save_path = save_path
             
             # Constants
@@ -542,7 +543,7 @@ class HorseTracker:
             
             
             # self._export_csv()
-            self._export_excel()
+            self._export_excel(self.excel_path)
             if self.save_path:
                 self._save_amended_video()
     
@@ -591,31 +592,45 @@ class HorseTracker:
                 
             
 if __name__ == "__main__":
+
     MODEL_PATH = '../YOLO_models/yolo11s_Professor_M_Horses_F10.pt'
-    # MODEL_PATH = '../YOLO_models/yolo11s.pt'
+    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/2_individuals_1_leave_return.mp4.mov'
+
+    parser = argparse.ArgumentParser(description="Horse Activity Tracking via YOLO and botSORT")
+    parser.add_argument("--video", type=str, default=VIDEO_PATH, help="Path to the input video")
+    parser.add_argument("--model", type=str, default=MODEL_PATH, help="Path to YOLO model (default: ../YOLO_models/yolo11s.pt)")
+    parser.add_argument("--excel-out", type=str, default="horse_activity_log.xlsx", help="Path to save the output Excel file")
+    parser.add_argument("--video-out", type=str, default=None, help="Path to save the amended output video")
+    parser.add_argument("--threshold", type=float, default=600.0, help="Movement threshold (default: 600.0)")
+    parser.add_argument("--individuals", type=int, default=2, help="Number of individuals to track (default: 2)")
+    parser.add_argument("--smoothing-window", type=int, default=75, help="Smoothing window size in frames (default: 75)")
+    parser.add_argument("--custom-model", action="store_true", help="Flag to indicate if using a custom single-class horse model to skip class rectification")
+    parser.add_argument("--plot", action="store_true", help="Flag to plot the output graph")
+    
+    args = parser.parse_args()
+    
+    # tracker = HorseTracker(
+    #     model_path=args.model,
+    #     video_path=args.video,
+    #     excel_path=args.excel_out,
+    #     save_path=args.video_out,
+    #     custom_model=args.custom_model,
+    #     movement_threshold=args.threshold,
+    #     individuals=args.individuals,
+    #     smoothing_window_size=args.smoothing_window
+    # )
+
+    # tracker.run()
+    
+    # if args.plot:
+    #     tracker.plot()
+
+    # MODEL_PATH = '../YOLO_models/yolo11s_Professor_M_Horses_F10.pt'
+    MODEL_PATH = '../YOLO_models/yolo11s.pt'
     # MODEL_PATH = '/Users/alexcolvin/Dev/Final Year Project/YOLO_models/yolo11s_Professor_M_Horses-2_NoWhiteFence_F0.pt'
-    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/clip_2.mp4'
+    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/2_individuals_1_leave_return.mp4.mov'
     # VIDEO_PATH = '/Volumes/USB Drive/TAPO/20260311_164113_tp00013_potential4unseen.mp4'
 
-    
-    SAVE_PATH = '/Volumes/USB Drive/TestingAmendVidFunction2.mp4'
-    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, custom_model=True, smoothing_window_size=75)
-    tracker.run()
-    
-    # models_test = [
-    #     '../YOLO_models/yolo11s_Professor_M_Horses_F0.pt',
-    #     '../YOLO_models/yolo11s_Professor_M_Horses_F10.pt',
-    #     '../YOLO_models/yolo11s_Professor_M_Horses_NoWhiteFence_F0.pt',
-    #     '../YOLO_models/yolo11s_Professor_M_Horses_NoWhiteFence_F10.pt',
-        
-    # ]
-    
-    # names = ['yolo11s_Professor_M_Horses-2_F0', 'yolo11s_Professor_M_Horses_F10', 'yolo11s_Professor_M_Horses-2_NoWhiteFence_F0', 'yolo11s_Professor_M_Horses_NoWhiteFence_F10']
-    
-    # for name, model in zip(names, models_test):
-    #     SAVE_PATH = f'/Volumes/USB Drive/Output_Videos/Testing white horse near fence/WhiteHorseNearFenceModel{name}.mp4'
-    #     tracker = HorseTracker(model, VIDEO_PATH, save_path=SAVE_PATH, custom_model=True, smoothing_window_size=75)
-    #     tracker.run()   
-    
 
-    
+    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, custom_model=False, smoothing_window_size=75)
+    tracker.run()

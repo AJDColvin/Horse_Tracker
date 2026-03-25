@@ -64,6 +64,7 @@ class HorseTracker:
             self.state_history = {i: [] for i in range(individuals)}
             self.valid_ids = list(range(1, individuals + 1))
             self.frame_data = {} # Cache bounding box data for ammended video
+            self.tracker_to_valid_map = {}
             
             self.discrete_state_history = {i: [] for i in range(individuals)}
             self.discrete_state_history_smooth = {i: [] for i in range(individuals)}
@@ -79,47 +80,71 @@ class HorseTracker:
             seconds = int(total_seconds % 60)
             milliseconds = int((total_seconds % 1) * 1000)
             return f"{minutes:02d}:{seconds:02d}.{milliseconds:03d}" 
-        
+    
+
+        # Assuming self.valid_ids is a list or set like [1, 2, 3, 4, 5]
+        # Assuming self.tracker_to_valid_map = {} is initialised in your class __init__
+
         def _rectify_ids(self, result) -> dict:
-            """Handles logic for overriding animal classes with horse class"""
+            """Handles logic for overriding animal classes and mapping tracker IDs"""
             
-            # Replace any animal detections with horses
             amended_boxes = result.boxes.data.clone() 
+            
+            # Replace any animal detections with horses (Class 17)
             if not self.custom_model: 
+                # Assuming id_to_replace is defined elsewhere in your class/file
                 for class_id in id_to_replace:
                     amended_boxes[:, -1][amended_boxes[:, -1] == class_id] = 17
             
-            # annotated_frame = result.plot(line_width=2)
-            # boxes = result.boxes.xyxy.cpu().numpy()
-            
             if result.boxes.id is not None:
-                ids = result.boxes.id.cpu().numpy() 
-        
-                # Replace invalid IDs with valid ones 
-                valid_ids_oof = list(set(self.valid_ids)-set(ids)) # Find valid ids, not in current ids
-                replacement_ids = iter(valid_ids_oof)
-                set_valid_ids = set(self.valid_ids)
-                rectified_ids = [next(replacement_ids, x) if x not in set_valid_ids else x for x in ids]
+                raw_ids = result.boxes.id.cpu().numpy().astype(int)
+                boxes = result.boxes.xyxy.cpu().numpy()
                 
+                rectified_ids = []
+                
+                # Determine which valid IDs are currently in use by the mapping for THIS frame
+                # We need to clean up the map if a raw ID has disappeared, but for simplicity,
+                # we assign based on what is currently missing.
+                
+                for raw_id in raw_ids:
+                    if raw_id not in self.tracker_to_valid_map:
+                        # Find valid IDs that are currently NOT being used in this frame
+                        currently_used_valid_ids = [
+                            self.tracker_to_valid_map[rid] for rid in raw_ids if rid in self.tracker_to_valid_map
+                        ]
+                        available_ids = list(set(self.valid_ids) - set(currently_used_valid_ids))
+                        
+                        if available_ids:
+                            # Assign the first available valid ID to this new raw tracker ID
+                            assigned_id = available_ids[0]
+                            self.tracker_to_valid_map[raw_id] = assigned_id
+                        else:
+                            # Fallback if there are more detections than valid IDs
+                            # You might want to handle this differently based on your specific needs
+                            assigned_id = raw_id 
+                            self.tracker_to_valid_map[raw_id] = assigned_id
+                    
+                    rectified_ids.append(self.tracker_to_valid_map[raw_id])
+                    
+                    
+                print(f"RAW: {raw_ids} | DIC: {self.tracker_to_valid_map} | RECT: {rectified_ids}")
+
+                # Overwrite the ID column (Index 4) with the rectified IDs
                 new_ids_tensor = torch.tensor(rectified_ids, device=amended_boxes.device, dtype=amended_boxes.dtype)
-
-                # 4. Overwrite the ID column (Index 4)
                 amended_boxes[:, 4] = new_ids_tensor
-
                 result.boxes.data = amended_boxes
                 
+                # Plotting uses the modified result object
                 annotated_frame = result.plot(line_width=2)
                 
+                # Create the dictionary mapping your rectified IDs to their bounding boxes
+                id_to_box = dict(zip(rectified_ids, boxes))
                 
-                ids = result.boxes.id.cpu().numpy() 
-                boxes = result.boxes.xyxy.cpu().numpy()
-                id_to_box = dict(zip(ids.astype(int), boxes))
-            
             else:
                 result.boxes.data = amended_boxes
                 annotated_frame = result.plot(line_width=2)
-                id_to_box = {} # If no ids at all, every individual given OOF           
-        
+                id_to_box = {}            
+
             return id_to_box, annotated_frame
             
         def _calculate_movement(self, id_val: int, box: tuple, frame_no: int) -> str:
@@ -642,12 +667,12 @@ if __name__ == "__main__":
     # if args.plot:
     #     tracker.plot()
 
-    # MODEL_PATH = '../YOLO_models/yolo11s_Professor_M_Horses_F10.pt'
+    # MODEL_PATH = '../YOLO_models/yolo11s_Professor_M_Horses_F0.pt'
     MODEL_PATH = '../YOLO_models/yolo11s.pt'
     # MODEL_PATH = '/Users/alexcolvin/Dev/Final Year Project/YOLO_models/yolo11s_Professor_M_Horses-2_NoWhiteFence_F0.pt'
-    VIDEO_PATH = '/Volumes/USB Drive/TAPO_clips/2_individuals_1_leave_return.mp4.mov'
+    VIDEO_PATH = '/Volumes/USB Drive/YT_clips/yt_clip.mp4'
     # VIDEO_PATH = '/Volumes/USB Drive/TAPO/20260311_164113_tp00013_potential4unseen.mp4'
 
 
-    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, custom_model=False, smoothing_window_size=75)
+    tracker = HorseTracker(MODEL_PATH, VIDEO_PATH, custom_model=False, smoothing_window_size=75, individuals=5)
     tracker.run()

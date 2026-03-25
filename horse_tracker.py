@@ -30,7 +30,9 @@ class HorseTracker:
             custom_model: bool = False,
             movement_threshold: float = 600.0,
             individuals: int = 2,
-            smoothing_window_size: int = 31
+            smoothing_window_size: int = 31,
+            tracker_config: str = "trackers/custom_botsort.yaml",
+            device: str = None
         ):
             
             # Filepaths
@@ -38,6 +40,17 @@ class HorseTracker:
             self.video_path = video_path
             self.excel_path = excel_path
             self.save_path = save_path
+            self.tracker_config = tracker_config
+            
+            if device is None:
+                if torch.cuda.is_available():
+                    self.device = 'cuda'
+                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    self.device = 'mps'
+                else:
+                    self.device = 'cpu'
+            else:
+                self.device = device
             
             # Constants
             self.movement_threshold = movement_threshold
@@ -474,12 +487,12 @@ class HorseTracker:
         def run(self):
             """Main execution loop"""
             results = self.model.track(
-                tracker="custom_botsort.yaml",
+                tracker=self.tracker_config,
                 source=self.video_path,
                 show=False,
                 stream=True, 
                 conf=0.1,
-                device='mps',
+                device=self.device,
                 agnostic_nms=True,
                 verbose=False, 
                 vid_stride=STRIDE,
@@ -599,6 +612,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Horse Activity Tracking via YOLO and botSORT")
     parser.add_argument("--video", type=str, default=VIDEO_PATH, help="Path to the input video")
     parser.add_argument("--model", type=str, default=MODEL_PATH, help="Path to YOLO model (default: ../YOLO_models/yolo11s.pt)")
+    parser.add_argument("--tracker", type=str, default="trackers/custom_botsort.yaml", help="Path to tracker config file (default: custom_botsort.yaml)")
+    parser.add_argument("--device", type=str, default=None, help="Device to run on (cuda, mps, cpu). Auto-detects if None")
     parser.add_argument("--excel-out", type=str, default="horse_activity_log.xlsx", help="Path to save the output Excel file")
     parser.add_argument("--video-out", type=str, default=None, help="Path to save the amended output video")
     parser.add_argument("--threshold", type=float, default=600.0, help="Movement threshold (default: 600.0)")
@@ -617,7 +632,9 @@ if __name__ == "__main__":
     #     custom_model=args.custom_model,
     #     movement_threshold=args.threshold,
     #     individuals=args.individuals,
-    #     smoothing_window_size=args.smoothing_window
+    #     smoothing_window_size=args.smoothing_window,
+    #     tracker_config=args.tracker,
+    #     device=args.device
     # )
 
     # tracker.run()

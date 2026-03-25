@@ -1,5 +1,6 @@
 .DS_Store
 .vscode/
+utils/
 horse_activity_log.csv
 models/yolo11s_Professor_M_Horses_F0.pt
 models/yolo11s_Professor_M_Horses_F10.pt
